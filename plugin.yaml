@@ -1,0 +1,13 @@
+id: bank-import
+name: Bank file import
+version: "1.0.0"
+hubra: ">=0.1,<1"
+description: "Import camt.054 files from your bank. QR-bill payments are matched to invoices by reference and marked paid, with a dry run first."
+author: Hubra
+homepage: https://github.com/hubra-app/hubra
+tags: [finance, switzerland]
+package: hubra_bank
+modules: [finance.bank]
+requires: [finance]
+migrations: migrations
+frontend: frontend/dist/plugin.js
