@@ -1,0 +1,66 @@
+{
+  "en-GB": {
+    "bank": {
+      "booked": "{{count}} invoices marked paid",
+      "importTitle": "Import bank file",
+      "importHint": "Download the camt.054 file (credit notification) from your e-banking. QR-bill payments are matched to invoices by their reference. You see the result before anything is booked.",
+      "pickFile": "camt.054 file (.xml)",
+      "check": "Check file",
+      "alreadyImported": "Already imported",
+      "book": "Book payments",
+      "date": "Date",
+      "from": "From",
+      "amount": "Amount",
+      "statusLabel": "Result",
+      "invoice": "Invoice",
+      "toCheck": "Payments to check",
+      "toCheckHint": "These payments had no matching invoice or a different amount. Assign them to an invoice to mark it paid.",
+      "pickInvoice": "Invoice",
+      "assign": "Mark paid",
+      "status": {
+        "matched": "Matched",
+        "assigned": "Assigned",
+        "unmatched": "No invoice",
+        "mismatch": "Amount differs",
+        "duplicate_payment": "Already paid"
+      }
+    },
+    "shell": {
+      "nav": {
+        "bankImport": "Bank import"
+      }
+    }
+  },
+  "de-CH": {
+    "bank": {
+      "booked": "{{count}} Rächnige als zahlt markiert",
+      "importTitle": "Bankdatei importiere",
+      "importHint": "Lad d camt.054-Datei (Gutschriftsaazeig) im E-Banking abe. QR-Rächnige wärded über d Referenz de Rächnig zuegordnet. Du gsehsch s Resultat, bevor öppis verbuecht wird.",
+      "pickFile": "camt.054-Datei (.xml)",
+      "check": "Datei prüefe",
+      "alreadyImported": "Scho importiert",
+      "book": "Zahlige verbueche",
+      "date": "Datum",
+      "from": "Vo",
+      "amount": "Betrag",
+      "statusLabel": "Resultat",
+      "invoice": "Rächnig",
+      "toCheck": "Zahlige zum Prüefe",
+      "toCheckHint": "Für die Zahlige hätts kei passendi Rächnig oder en andere Betrag. Ordne si ere Rächnig zue, dänn wird die als zahlt markiert.",
+      "pickInvoice": "Rächnig",
+      "assign": "Als zahlt markiere",
+      "status": {
+        "matched": "Zuegordnet",
+        "assigned": "Vo Hand zuegordnet",
+        "unmatched": "Kei Rächnig",
+        "mismatch": "Betrag anders",
+        "duplicate_payment": "Scho zahlt"
+      }
+    },
+    "shell": {
+      "nav": {
+        "bankImport": "Bankimport"
+      }
+    }
+  }
+}
