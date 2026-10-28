@@ -13,7 +13,6 @@ module = Module(
             "hubra_bank.routes",
             "bank_bp",
             "/api/v1/bank",
-            v2=(("/api/v2/tenants/bank", "bank_bp_v2"),),
         ),
     ),
     tables=("bank_rules", "bank_payments", "bank_csv_profiles"),
