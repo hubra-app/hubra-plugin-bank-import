@@ -1,11 +1,11 @@
-"""Bank import: read camt.054 files and mark QR-bill invoices as paid."""
+"""Bank import: read bank statements, mark invoices paid, book the rest."""
 
 from hubra.core.modules import Blueprint, Module
 
 module = Module(
     code="finance.bank",
     name="Bank file import",
-    description="Import camt.054 files from your bank; QR-bill payments are matched to invoices by reference",
+    description="Import bank statements (camt.053/054, MT940, CSV); payments are matched to invoices and other bookings go into the books",
     default_enabled=False,
     depends_on=("finance",),
     blueprints=(
@@ -16,5 +16,5 @@ module = Module(
             v2=(("/api/v2/tenants/bank", "bank_bp_v2"),),
         ),
     ),
-    tables=("bank_payments",),
+    tables=("bank_rules", "bank_payments", "bank_csv_profiles"),
 )

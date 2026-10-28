@@ -1,27 +1,46 @@
 import { useState } from 'react'
-import { Badge, Button, FileInput, Group, Paper, Select, Stack, Table, Text } from '@mantine/core'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  Alert,
+  Badge,
+  Button,
+  FileInput,
+  Group,
+  MultiSelect,
+  Paper,
+  Select,
+  SimpleGrid,
+  Stack,
+  Table,
+  Text,
+} from '@mantine/core'
+import { useQueryClient } from '@tanstack/react-query'
 import { IconFileUpload } from '@tabler/icons-react'
 import { useT } from '@hubra/plugin-sdk'
 import { useAuth, useToast } from '@hubra/plugin-sdk'
 import { formatCHF } from '@hubra/plugin-sdk'
-import { listInvoices } from '@hubra/plugin-sdk'
 import {
-  assignBankPayment,
-  importCamt054,
-  listBankPayments,
-  type BankPayment,
+  importBankFile,
+  readCsvColumns,
+  type CsvColumns,
+  type CsvField,
+  type CsvMapping,
   type ImportResult,
   type PaymentStatus,
+  type SummaryKey,
 } from './api'
+import { OpenPayments } from './OpenPayments'
+import { STATUS_COLOR, signedAmount } from './status'
+import { BankRules } from './BankRules'
 
-const STATUS_COLOR: Record<PaymentStatus, string> = {
-  matched: 'green',
-  assigned: 'green',
-  unmatched: 'orange',
-  mismatch: 'red',
-  duplicate_payment: 'grape',
-}
+const SUMMARY: SummaryKey[] = [
+  'matched',
+  'suggested',
+  'booked',
+  'unmatched',
+  'mismatch',
+  'duplicate_payment',
+  'batch',
+]
 
 export function BankImportTab() {
   const { t } = useT()
@@ -31,9 +50,9 @@ export function BankImportTab() {
   const canImport = hasPermission('bank.payments.import')
   const [file, setFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<ImportResult | null>(null)
+  const [csv, setCsv] = useState<CsvColumns | null>(null)
+  const [mapping, setMapping] = useState<CsvMapping | undefined>()
   const [busy, setBusy] = useState(false)
-
-  const statusLabel = (s: PaymentStatus) => t(`bank.status.${s}`, s)
 
   const fail = (err: unknown) =>
     notify(
@@ -42,31 +61,51 @@ export function BankImportTab() {
       err instanceof Error ? err.message : t('common.unknownError'),
     )
 
-  const run = async (dryRun: boolean) => {
+  const reset = (f: File | null) => {
+    setFile(f)
+    setPreview(null)
+    setCsv(null)
+    setMapping(undefined)
+  }
+
+  const run = async (dryRun: boolean, withMapping = mapping) => {
     if (!file) return
     setBusy(true)
     try {
-      const result = await importCamt054(file, dryRun)
+      const result = await importBankFile(file, dryRun, withMapping)
+      setCsv(null)
       if (dryRun) {
         setPreview(result)
       } else {
-        setPreview(null)
-        setFile(null)
+        reset(null)
         await queryClient.invalidateQueries({ queryKey: ['bank-payments'] })
         await queryClient.invalidateQueries({ queryKey: ['invoices'] })
         notify(
           'success',
-          t('bank.booked', '{{count}} invoices marked paid', {
-            count: result.summary.matched,
+          t('bank.imported', '{{matched}} invoices marked paid, {{booked}} bookings added', {
+            matched: result.summary.matched,
+            booked: result.summary.booked,
           }),
         )
       }
     } catch (err) {
-      fail(err)
+      if ((err as { code?: string }).code === 'CSV_MAPPING_REQUIRED') {
+        try {
+          const columns = await readCsvColumns(file)
+          setCsv(columns)
+          setMapping(columns.mapping)
+        } catch (inner) {
+          fail(inner)
+        }
+      } else {
+        fail(err)
+      }
     } finally {
       setBusy(false)
     }
   }
+
+  const statusLabel = (s: PaymentStatus) => t(`bank.status.${s}`, s)
 
   return (
     <Stack gap="md">
@@ -78,19 +117,16 @@ export function BankImportTab() {
           <Text fz="sm" c="dimmed" mb="md">
             {t(
               'bank.importHint',
-              'Download the camt.054 file (credit notification) from your e-banking. QR-bill payments are matched to invoices by their reference. You see the result before anything is booked.',
+              'Download the account statement from your e-banking: camt.053 (best), camt.054, MT940 or CSV. QR-bill payments are matched to invoices, other bookings follow your rules. You see the result before anything is booked.',
             )}
           </Text>
           <Group align="flex-end" gap="sm">
             <FileInput
               style={{ flex: 1, maxWidth: 420 }}
-              accept=".xml,application/xml,text/xml"
+              accept=".xml,.csv,.txt,.sta,.mt940,.940,application/xml,text/xml,text/csv"
               value={file}
-              onChange={(f) => {
-                setFile(f)
-                setPreview(null)
-              }}
-              placeholder={t('bank.pickFile', 'camt.054 file (.xml)')}
+              onChange={reset}
+              placeholder={t('bank.pickFile', 'Bank file (.xml, .csv, .sta)')}
               leftSection={<IconFileUpload size={16} />}
               clearable
             />
@@ -103,12 +139,24 @@ export function BankImportTab() {
               {t('bank.check', 'Check file')}
             </Button>
           </Group>
+          {csv && (
+            <CsvMappingForm
+              columns={csv}
+              mapping={mapping ?? {}}
+              onChange={setMapping}
+              onApply={() => run(true, mapping)}
+              busy={busy}
+            />
+          )}
           {preview && (
             <div style={{ marginTop: 16 }}>
               <Group gap="xs" mb="sm">
-                {(['matched', 'unmatched', 'mismatch', 'duplicate_payment'] as const).map((s) => (
-                  <Badge key={s} color={STATUS_COLOR[s]} variant="light">
-                    {statusLabel(s)}: {preview.summary[s]}
+                <Badge color="dark" variant="outline">
+                  {preview.format}
+                </Badge>
+                {SUMMARY.filter((s) => preview.summary[s] > 0).map((s) => (
+                  <Badge key={s} color={STATUS_COLOR[s as PaymentStatus]} variant="light">
+                    {statusLabel(s as PaymentStatus)}: {preview.summary[s]}
                   </Badge>
                 ))}
                 {preview.summary.already_imported > 0 && (
@@ -118,178 +166,191 @@ export function BankImportTab() {
                   </Badge>
                 )}
               </Group>
-              <PaymentTable
-                rows={preview.items.map((i) => ({
-                  key: i.bankReference,
-                  bookedOn: i.bookedOn,
-                  debtorName: i.debtorName,
-                  amount: i.amount,
-                  status: i.status,
-                  invoiceId: i.invoiceId,
-                }))}
-                statusLabel={statusLabel}
-              />
+              {preview.balances.map((b, i) => (
+                <Alert
+                  key={i}
+                  color={b.ok ? 'green' : 'red'}
+                  variant="light"
+                  mb="sm"
+                  title={
+                    b.ok
+                      ? t('bank.balanceOk', 'Balance checks out')
+                      : t('bank.balanceOff', 'Balance does not add up')
+                  }
+                >
+                  {b.accountIban ?? ''} {formatCHF(Number(b.opening))} →{' '}
+                  {formatCHF(Number(b.closing))}
+                  {!b.ok &&
+                    ` · ${t('bank.balanceOffHint', 'Some bookings may be missing from the file.')}`}
+                </Alert>
+              ))}
+              <Table.ScrollContainer minWidth={640}>
+                <Table fz="sm" verticalSpacing={6}>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>{t('bank.date', 'Date')}</Table.Th>
+                      <Table.Th>{t('bank.counterparty', 'Who')}</Table.Th>
+                      <Table.Th>{t('bank.text', 'Text')}</Table.Th>
+                      <Table.Th ta="right">{t('bank.amount', 'Amount')}</Table.Th>
+                      <Table.Th>{t('bank.statusLabel', 'Result')}</Table.Th>
+                      <Table.Th>{t('bank.target', 'Booked as')}</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {preview.items.map((i) => (
+                      <Table.Tr key={i.bankReference}>
+                        <Table.Td>{new Date(i.bookedOn).toLocaleDateString()}</Table.Td>
+                        <Table.Td>{i.counterpartyName ?? '—'}</Table.Td>
+                        <Table.Td
+                          maw={260}
+                          style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}
+                        >
+                          {i.remittance ?? ''}
+                        </Table.Td>
+                        <Table.Td
+                          ta="right"
+                          className="num"
+                          c={i.direction === 'debit' ? 'red' : undefined}
+                        >
+                          {signedAmount(i.direction, i.amount)}
+                        </Table.Td>
+                        <Table.Td>
+                          <Badge color={STATUS_COLOR[i.status]} variant="light" size="sm">
+                            {statusLabel(i.status)}
+                          </Badge>
+                        </Table.Td>
+                        <Table.Td>
+                          {i.invoiceId
+                            ? `#${i.invoiceId}`
+                            : i.suggestedInvoiceId
+                              ? `#${i.suggestedInvoiceId}?`
+                              : (i.ruleName ?? '—')}
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </Table.ScrollContainer>
               <Group justify="flex-end" mt="md">
                 <Button
                   onClick={() => run(false)}
                   loading={busy}
                   disabled={preview.items.length === 0}
                 >
-                  {t('bank.book', 'Book payments')}
+                  {t('bank.book', 'Import bookings')}
                 </Button>
               </Group>
             </div>
           )}
         </Paper>
       )}
-      <OpenPayments canAssign={canImport} onError={fail} />
+      <OpenPayments canEdit={canImport} onError={fail} />
+      <BankRules canEdit={canImport} onError={fail} />
     </Stack>
   )
 }
 
-function PaymentTable({
-  rows,
-  statusLabel,
-  action,
+const MAPPED_FIELDS: CsvField[] = [
+  'date',
+  'amount',
+  'credit',
+  'debit',
+  'counterparty',
+  'text',
+  'reference',
+  'iban',
+  'currency',
+  'value_date',
+  'bank_reference',
+]
+
+/** Shown when the CSV's columns were not recognised. */
+function CsvMappingForm({
+  columns,
+  mapping,
+  onChange,
+  onApply,
+  busy,
 }: {
-  rows: {
-    key: string | number
-    bookedOn: string
-    debtorName: string | null
-    amount: string
-    status: PaymentStatus
-    invoiceId: number | null
-    payment?: BankPayment
-  }[]
-  statusLabel: (s: PaymentStatus) => string
-  action?: (payment: BankPayment) => React.ReactNode
+  columns: CsvColumns
+  mapping: CsvMapping
+  onChange: (m: CsvMapping) => void
+  onApply: () => void
+  busy: boolean
 }) {
   const { t } = useT()
-  return (
-    <Table.ScrollContainer minWidth={560}>
-      <Table fz="sm" verticalSpacing={6}>
-        <Table.Thead>
-          <Table.Tr>
-            <Table.Th>{t('bank.date', 'Date')}</Table.Th>
-            <Table.Th>{t('bank.from', 'From')}</Table.Th>
-            <Table.Th ta="right">{t('bank.amount', 'Amount')}</Table.Th>
-            <Table.Th>{t('bank.statusLabel', 'Result')}</Table.Th>
-            <Table.Th>{t('bank.invoice', 'Invoice')}</Table.Th>
-            {action && <Table.Th />}
-          </Table.Tr>
-        </Table.Thead>
-        <Table.Tbody>
-          {rows.map((r) => (
-            <Table.Tr key={r.key}>
-              <Table.Td>{new Date(r.bookedOn).toLocaleDateString()}</Table.Td>
-              <Table.Td>{r.debtorName ?? '—'}</Table.Td>
-              <Table.Td ta="right" className="num">
-                {formatCHF(Number(r.amount))}
-              </Table.Td>
-              <Table.Td>
-                <Badge color={STATUS_COLOR[r.status]} variant="light" size="sm">
-                  {statusLabel(r.status)}
-                </Badge>
-              </Table.Td>
-              <Table.Td>{r.invoiceId ? `#${r.invoiceId}` : '—'}</Table.Td>
-              {action && r.payment && <Table.Td>{action(r.payment)}</Table.Td>}
-            </Table.Tr>
-          ))}
-        </Table.Tbody>
-      </Table>
-    </Table.ScrollContainer>
+  const options = columns.columns.filter(Boolean)
+  const set = (field: CsvField, value: string[]) =>
+    onChange({ ...mapping, [field]: value.length ? value : undefined })
+  const ready = Boolean(
+    mapping.date?.length &&
+    (mapping.amount?.length || mapping.credit?.length || mapping.debit?.length),
   )
-}
-
-/** Payments that could not be booked automatically, to assign by hand. */
-function OpenPayments({
-  canAssign,
-  onError,
-}: {
-  canAssign: boolean
-  onError: (err: unknown) => void
-}) {
-  const { t } = useT()
-  const queryClient = useQueryClient()
-  const { data: unmatched = [] } = useQuery({
-    queryKey: ['bank-payments', 'unmatched'],
-    queryFn: () => listBankPayments('unmatched'),
-  })
-  const { data: mismatch = [] } = useQuery({
-    queryKey: ['bank-payments', 'mismatch'],
-    queryFn: () => listBankPayments('mismatch'),
-  })
-  const payments = [...mismatch, ...unmatched]
-  const { data: invoices = [] } = useQuery({
-    queryKey: ['invoices'],
-    queryFn: listInvoices,
-    enabled: canAssign && payments.length > 0,
-  })
-  const [choice, setChoice] = useState<Record<number, string | null>>({})
-  const openInvoices = invoices
-    .filter((i) => i.status !== 'Paid')
-    .map((i) => ({
-      value: i.id,
-      label: `#${i.id} · ${i.recipientName} · ${formatCHF(i.amount)}`,
-    }))
-
-  if (payments.length === 0) return null
-
-  const assign = async (p: BankPayment) => {
-    const invoiceId = choice[p.id]
-    if (!invoiceId) return
-    try {
-      await assignBankPayment(p.id, Number(invoiceId))
-      await queryClient.invalidateQueries({ queryKey: ['bank-payments'] })
-      await queryClient.invalidateQueries({ queryKey: ['invoices'] })
-    } catch (err) {
-      onError(err)
-    }
-  }
-
   return (
-    <Paper withBorder shadow="sm" radius="lg" p="lg">
-      <Text fw={600} mb={4}>
-        {t('bank.toCheck', 'Payments to check')}
-      </Text>
-      <Text fz="sm" c="dimmed" mb="md">
+    <Alert
+      color="blue"
+      variant="light"
+      mt="md"
+      title={t('bank.mapTitle', 'Which column is which?')}
+    >
+      <Text fz="sm" mb="sm">
         {t(
-          'bank.toCheckHint',
-          'These payments had no matching invoice or a different amount. Assign them to an invoice to mark it paid.',
+          'bank.mapHint',
+          'Hubra did not recognise the columns of this file. Pick them once; files from this bank with the same columns are read the same way from now on.',
         )}
       </Text>
-      <PaymentTable
-        rows={payments.map((p) => ({
-          key: p.id,
-          bookedOn: p.bookedOn,
-          debtorName: p.debtorName ?? p.remittance,
-          amount: p.amount,
-          status: p.status,
-          invoiceId: p.invoiceId,
-          payment: p,
-        }))}
-        statusLabel={(s) => t(`bank.status.${s}`, s)}
-        action={
-          canAssign
-            ? (p) => (
-                <Group gap={6} wrap="nowrap">
-                  <Select
-                    size="xs"
-                    w={220}
-                    searchable
-                    data={openInvoices}
-                    value={choice[p.id] ?? (p.invoiceId ? String(p.invoiceId) : null)}
-                    onChange={(v) => setChoice((c) => ({ ...c, [p.id]: v }))}
-                    placeholder={t('bank.pickInvoice', 'Invoice')}
-                  />
-                  <Button size="xs" onClick={() => assign(p)}>
-                    {t('bank.assign', 'Mark paid')}
-                  </Button>
-                </Group>
-              )
-            : undefined
-        }
-      />
-    </Paper>
+      <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs">
+        {MAPPED_FIELDS.map((field) =>
+          field === 'text' ? (
+            <MultiSelect
+              key={field}
+              size="xs"
+              label={t(`bank.field.${field}`, field)}
+              data={options}
+              value={mapping[field] ?? []}
+              onChange={(v) => set(field, v)}
+              clearable
+            />
+          ) : (
+            <Select
+              key={field}
+              size="xs"
+              label={t(`bank.field.${field}`, field)}
+              data={options}
+              value={mapping[field]?.[0] ?? null}
+              onChange={(v) => set(field, v ? [v] : [])}
+              clearable
+            />
+          ),
+        )}
+      </SimpleGrid>
+      {columns.sample.length > 0 && (
+        <Table.ScrollContainer minWidth={480} mt="sm">
+          <Table fz="xs" withTableBorder>
+            <Table.Thead>
+              <Table.Tr>
+                {columns.columns.map((c, i) => (
+                  <Table.Th key={i}>{c}</Table.Th>
+                ))}
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {columns.sample.slice(0, 3).map((row, r) => (
+                <Table.Tr key={r}>
+                  {row.map((cell, c) => (
+                    <Table.Td key={c}>{cell}</Table.Td>
+                  ))}
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+        </Table.ScrollContainer>
+      )}
+      <Group justify="flex-end" mt="sm">
+        <Button size="xs" disabled={!ready} loading={busy} onClick={onApply}>
+          {t('bank.check', 'Check file')}
+        </Button>
+      </Group>
+    </Alert>
   )
 }

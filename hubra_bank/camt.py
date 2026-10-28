@@ -1,33 +1,40 @@
-"""camt.054 parser (ISO 20022 debit/credit notification, Swiss SPS flavour).
+"""camt.052, camt.053 and camt.054 reader (ISO 20022, Swiss SPS flavour).
 
-Reads the credits of a file into plain dicts. Namespace-agnostic, so
-camt.054.001.04 and .08 (and the bank-specific variants) all work.
+camt.053 is the daily account statement every Swiss bank offers, camt.054
+the detailed notification some banks use for QR-bill credits, and camt.052
+the intraday report.  All three share the entry layout, so one reader
+handles them.  It is namespace-agnostic, so .001.04 to .001.08 and the
+bank-specific variants all work.
 """
 
 from __future__ import annotations
 
-import hashlib
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
-MAX_BYTES = 10 * 1024 * 1024
+from .lines import (
+    Balance,
+    BankLine,
+    Statement,
+    StatementError,
+    check_size,
+    classify_reference,
+    derived_reference,
+    normalise_iban,
+)
 
 
-class CamtError(ValueError):
+class CamtError(StatementError):
     pass
 
 
-@dataclass
-class Credit:
-    bank_reference: str
-    amount: Decimal
-    currency: str
-    booked_on: date
-    qr_reference: str | None
-    debtor_name: str | None
-    remittance: str | None
+# Root element -> (format name, report element)
+_KINDS = {
+    "BkToCstmrStmt": ("camt.053", "Stmt"),
+    "BkToCstmrAcctRpt": ("camt.052", "Rpt"),
+    "BkToCstmrDbtCdtNtfctn": ("camt.054", "Ntfctn"),
+}
 
 
 def _local(tag: str) -> str:
@@ -54,9 +61,9 @@ def _text(el, *path) -> str | None:
     return node.text.strip() or None
 
 
-def _date(el) -> date | None:
-    for path in (("BookgDt", "Dt"), ("BookgDt", "DtTm"), ("ValDt", "Dt")):
-        value = _text(el, *path)
+def _date(el, name: str) -> date | None:
+    for sub in ("Dt", "DtTm"):
+        value = _text(el, name, sub)
         if value:
             try:
                 return date.fromisoformat(value[:10])
@@ -68,6 +75,8 @@ def _date(el) -> date | None:
 def _amount(el) -> tuple[Decimal, str] | None:
     node = _child(el, "Amt")
     if node is None or not node.text:
+        node = _child(el, "AmtDtls", "TxAmt", "Amt")
+    if node is None or not node.text:
         return None
     try:
         return Decimal(node.text.strip()), node.get("Ccy", "CHF")
@@ -75,14 +84,106 @@ def _amount(el) -> tuple[Decimal, str] | None:
         return None
 
 
-def _debtor(tx) -> str | None:
+def _party(tx, role: str) -> tuple[str | None, str | None]:
     parties = _child(tx, "RltdPties")
-    return _text(parties, "Dbtr", "Pty", "Nm") or _text(parties, "Dbtr", "Nm")
+    name = _text(parties, role, "Pty", "Nm") or _text(parties, role, "Nm")
+    iban = _text(parties, f"{role}Acct", "Id", "IBAN")
+    return name, normalise_iban(iban)
 
 
-def parse(data: bytes) -> list[Credit]:
-    if len(data) > MAX_BYTES:
-        raise CamtError("File is too large")
+def _booked(entry) -> bool:
+    status = _text(entry, "Sts", "Cd") or _text(entry, "Sts")
+    return status in (None, "BOOK")
+
+
+def _balances(report, movement: Decimal) -> list[Balance]:
+    found: dict[str, Decimal] = {}
+    for bal in _children(report, "Bal"):
+        code = _text(bal, "Tp", "CdOrPrtry", "Cd")
+        amt = _amount(bal)
+        if code is None or amt is None:
+            continue
+        value = amt[0] if _text(bal, "CdtDbtInd") != "DBIT" else -amt[0]
+        found.setdefault(code, value)
+    opening = found.get("OPBD", found.get("PRCD"))
+    closing = found.get("CLBD")
+    if opening is None or closing is None:
+        return []
+    iban = normalise_iban(_text(report, "Acct", "Id", "IBAN"))
+    return [Balance(iban, opening, closing, movement)]
+
+
+def _entry_lines(entry, account: str | None) -> list[BankLine]:
+    direction = "credit" if _text(entry, "CdtDbtInd") == "CRDT" else "debit"
+    booked_on = _date(entry, "BookgDt") or _date(entry, "ValDt")
+    entry_amt = _amount(entry)
+    if booked_on is None or entry_amt is None:
+        return []
+    value_date = _date(entry, "ValDt")
+    reversal = (_text(entry, "RvslInd") or "").lower() == "true"
+    entry_ref = _text(entry, "AcctSvcrRef") or _text(entry, "NtryRef")
+    entry_text = _text(entry, "AddtlNtryInf")
+    details = [
+        tx for d in _children(entry, "NtryDtls") for tx in _children(d, "TxDtls")
+    ]
+    batch_count = max(
+        (
+            int(n)
+            for d in _children(entry, "NtryDtls")
+            if (n := _text(d, "Btch", "NbOfTxs")) and n.isdigit()
+        ),
+        default=0,
+    )
+    if not details:
+        details = [entry]
+    lines = []
+    for index, tx in enumerate(details):
+        tx_direction = direction
+        if tx is not entry and _text(tx, "CdtDbtInd") in ("CRDT", "DBIT"):
+            tx_direction = "credit" if _text(tx, "CdtDbtInd") == "CRDT" else "debit"
+        amt = _amount(tx) if tx is not entry else entry_amt
+        if amt is None and len(details) == 1:
+            amt = entry_amt
+        if amt is None:
+            continue
+        role = "Dbtr" if tx_direction == "credit" else "Cdtr"
+        name, iban = _party(tx, role)
+        ref, ref_type = classify_reference(
+            _text(tx, "RmtInf", "Strd", "CdtrRefInf", "Ref")
+        )
+        remittance = " ".join(
+            (u.text or "").strip() for u in _children(_child(tx, "RmtInf"), "Ustrd")
+        ).strip() or (_text(tx, "AddtlTxInf") or entry_text or "")
+        bank_ref = _text(tx, "Refs", "AcctSvcrRef") if tx is not entry else None
+        if bank_ref is None and entry_ref:
+            bank_ref = entry_ref if len(details) == 1 else f"{entry_ref}/{index}"
+        if bank_ref is None:
+            bank_ref = derived_reference(
+                account, booked_on, tx_direction, amt[0], ref, name, index
+            )
+        lines.append(
+            BankLine(
+                bank_reference=bank_ref[:120],
+                direction=tx_direction,
+                amount=abs(amt[0]),
+                currency=amt[1],
+                booked_on=booked_on,
+                value_date=value_date,
+                reference=ref,
+                reference_type=ref_type,
+                counterparty_name=name[:255] if name else None,
+                counterparty_iban=iban,
+                remittance=remittance[:500] or None,
+                account_iban=account,
+                reversal=reversal,
+                batch=tx is entry and batch_count > 1,
+            )
+        )
+    return lines
+
+
+def parse(data: bytes) -> Statement:
+    check_size(data)
     # Bank files never need a DTD; refusing one rules out entity tricks.
     if b"<!DOCTYPE" in data[:4096].upper():
         raise CamtError("File contains a DOCTYPE")
@@ -91,58 +192,24 @@ def parse(data: bytes) -> list[Credit]:
     except ET.ParseError as exc:
         raise CamtError(f"Not an XML file: {exc}") from exc
 
-    notif = _child(root, "BkToCstmrDbtCdtNtfctn")
-    if notif is None:
-        raise CamtError("Not a camt.054 file (no BkToCstmrDbtCdtNtfctn)")
+    for tag, (fmt, report_tag) in _KINDS.items():
+        body = _child(root, tag)
+        if body is not None:
+            break
+    else:
+        raise CamtError("Not a camt.052, camt.053 or camt.054 file")
 
-    credits: list[Credit] = []
-    for ntfctn in _children(notif, "Ntfctn"):
-        for entry in _children(ntfctn, "Ntry"):
-            if _text(entry, "CdtDbtInd") != "CRDT":
+    statement = Statement(format=fmt)
+    for report in _children(body, report_tag):
+        account = normalise_iban(_text(report, "Acct", "Id", "IBAN"))
+        movement = Decimal(0)
+        for entry in _children(report, "Ntry"):
+            if not _booked(entry):
                 continue
-            if (_text(entry, "RvslInd") or "").lower() == "true":
-                continue
-            status = _text(entry, "Sts") or _text(entry, "Sts", "Cd")
-            if status and status != "BOOK":
-                continue
-            booked_on = _date(entry)
-            entry_ref = _text(entry, "AcctSvcrRef") or _text(entry, "NtryRef")
-            details = [
-                tx
-                for d in _children(entry, "NtryDtls")
-                for tx in _children(d, "TxDtls")
-            ]
-            if not details:
-                details = [entry]
-            for index, tx in enumerate(details):
-                if tx is not entry and _text(tx, "CdtDbtInd") == "DBIT":
-                    continue
-                amt = _amount(tx) or (_amount(entry) if len(details) == 1 else None)
-                if amt is None or booked_on is None:
-                    continue
-                ref = _text(tx, "RmtInf", "Strd", "CdtrRefInf", "Ref")
-                unstructured = " ".join(
-                    (u.text or "").strip()
-                    for u in _children(_child(tx, "RmtInf"), "Ustrd")
-                ).strip()
-                bank_ref = _text(tx, "Refs", "AcctSvcrRef") or (
-                    f"{entry_ref}/{index}" if entry_ref else None
-                )
-                if bank_ref is None:
-                    # No bank reference at all: derive a stable one.
-                    digest = hashlib.sha256(
-                        f"{booked_on}|{amt[0]}|{ref}|{_debtor(tx)}|{index}".encode()
-                    ).hexdigest()[:32]
-                    bank_ref = f"sha:{digest}"
-                credits.append(
-                    Credit(
-                        bank_reference=bank_ref[:120],
-                        amount=amt[0],
-                        currency=amt[1],
-                        booked_on=booked_on,
-                        qr_reference=ref.replace(" ", "") if ref else None,
-                        debtor_name=_debtor(tx),
-                        remittance=unstructured[:500] or None,
-                    )
-                )
-    return credits
+            amt = _amount(entry)
+            if amt is not None:
+                sign = 1 if _text(entry, "CdtDbtInd") == "CRDT" else -1
+                movement += sign * amt[0]
+            statement.lines.extend(_entry_lines(entry, account))
+        statement.balances.extend(_balances(report, movement))
+    return statement

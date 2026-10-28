@@ -1,4 +1,5 @@
 """finance.bank: camt.054 import and QR reference matching."""
+# camt.053, MT940, CSV, suggestions and rules: test_statements.py
 
 from __future__ import annotations
 
@@ -76,19 +77,27 @@ def invoices(db, seeded_db):
     return a, b, refs
 
 
-def test_parser_reads_credits_only():
-    credits = parse(
+def test_parser_reads_credits_and_debits():
+    statement = parse(
         _camt(
             _tx("120.00", "21 00000 00003 13947 14300 09017", "T1"),
             _tx("10", None, "T2"),
         )
     )
-    assert [(c.bank_reference, c.amount) for c in credits] == [
-        ("T1", Decimal("120.00")),
-        ("T2", Decimal("10")),
+    assert statement.format == "camt.054"
+    lines = statement.lines
+    assert [(c.bank_reference, c.direction, c.amount) for c in lines] == [
+        ("T1", "credit", Decimal("120.00")),
+        ("T2", "credit", Decimal("10")),
+        # The debit entry and the reversal are bookings too.
+        (lines[2].bank_reference, "debit", Decimal("99")),
+        (lines[3].bank_reference, "credit", Decimal("5")),
     ]
-    assert credits[0].qr_reference == "210000000003139471430009017"
-    assert credits[0].debtor_name == "Hans Muster"
+    assert lines[3].reversal
+    credits = lines
+    assert credits[0].reference == "210000000003139471430009017"
+    assert credits[0].reference_type == "QRR"
+    assert credits[0].counterparty_name == "Hans Muster"
     assert credits[1].remittance == "Spende"
     assert credits[0].booked_on == date(2026, 10, 27)
 
@@ -112,6 +121,7 @@ def test_import_marks_matching_invoice_paid(client, db, auth_headers, invoices):
     preview = client.post("/api/v1/bank/camt054?dry_run=1", data=data)
     assert preview.status_code == 200
     assert preview.get_json()["summary"]["matched"] == 1
+    assert preview.get_json()["format"] == "camt.054"
     assert db.session.get(Invoice, a.id).status == "Open"
 
     resp = client.post(
@@ -122,9 +132,13 @@ def test_import_marks_matching_invoice_paid(client, db, auth_headers, invoices):
     summary = resp.get_json()["summary"]
     assert summary == {
         "matched": 1,
-        "unmatched": 1,
+        "suggested": 0,
+        "booked": 0,
+        # The 30.- credit, the 99.- debit and the 5.- reversal.
+        "unmatched": 3,
         "mismatch": 1,
         "duplicate_payment": 0,
+        "batch": 0,
         "already_imported": 0,
     }
     db.session.expire_all()
@@ -136,7 +150,7 @@ def test_import_marks_matching_invoice_paid(client, db, auth_headers, invoices):
 
     # Same file again books nothing.
     again = client.post("/api/v1/bank/camt054", data=data).get_json()["summary"]
-    assert again["already_imported"] == 3 and again["matched"] == 0
+    assert again["already_imported"] == 5 and again["matched"] == 0
 
     # The short payment can be assigned by hand.
     payments = client.get("/api/v1/bank/payments?status=mismatch").get_json()
