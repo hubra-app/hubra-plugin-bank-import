@@ -1,6 +1,6 @@
 id: bank-import
 name: Bank file import
-version: "1.1.0"
+version: "1.1.1"
 hubra: ">=0.1,<1"
 description: "Import bank statements (camt.053, camt.054, MT940 or CSV). Payments are matched to invoices and marked paid, other bookings go into the books by your rules, with a dry run first."
 author: Hubra

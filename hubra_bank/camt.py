@@ -10,6 +10,7 @@ bank-specific variants all work.
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
+from xml.parsers import expat
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
@@ -182,14 +183,22 @@ def _entry_lines(entry, account: str | None) -> list[BankLine]:
     return lines
 
 
+def _refuse_dtd(*_args) -> None:
+    raise CamtError("File contains a DOCTYPE")
+
+
 def parse(data: bytes) -> Statement:
     check_size(data)
     # Bank files never need a DTD; refusing one rules out entity tricks.
-    if b"<!DOCTYPE" in data[:4096].upper():
-        raise CamtError("File contains a DOCTYPE")
+    # The parser itself refuses it, wherever it is and however the file is
+    # encoded.
+    check = expat.ParserCreate()
+    check.StartDoctypeDeclHandler = _refuse_dtd
+    check.EntityDeclHandler = _refuse_dtd
     try:
+        check.Parse(data, True)
         root = ET.fromstring(data)
-    except ET.ParseError as exc:
+    except (expat.ExpatError, ET.ParseError) as exc:
         raise CamtError(f"Not an XML file: {exc}") from exc
 
     for tag, (fmt, report_tag) in _KINDS.items():

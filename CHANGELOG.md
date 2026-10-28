@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.1
+
+- camt files with a DOCTYPE are refused wherever it appears and in any
+  encoding (the XML parser refuses it, not a text search).
+
 ## 1.1.0
 
 - Reads camt.053 (daily statement) and camt.052 as well as camt.054, plus

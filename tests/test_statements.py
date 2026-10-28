@@ -483,3 +483,19 @@ def test_csv_columns(client, auth_headers, setup):
     assert body["mapping"]["credit"] == ["Gutschrift in CHF"]
     assert body["mapping"]["text"] == ["Avisierungstext"]
     assert len(body["sample"]) == 5
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        # Past the first 4 KB, where a text search used to stop looking.
+        b"<?xml version='1.0'?>" + b"<!-- " + b"x" * 5000 + b" -->"
+        b"<!DOCTYPE d [<!ENTITY e 'boom'>]><Document>&e;</Document>",
+        # UTF-16: no ASCII "<!DOCTYPE" bytes to find.
+        "<?xml version='1.0' encoding='UTF-16'?>"
+        "<!DOCTYPE d [<!ENTITY e 'boom'>]><Document>&e;</Document>".encode("utf-16"),
+    ],
+)
+def test_camt_refuses_any_dtd(data):
+    with pytest.raises(camt.CamtError, match="DOCTYPE"):
+        camt.parse(data)
