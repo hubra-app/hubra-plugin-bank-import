@@ -112,6 +112,9 @@ def _mark_paid(invoice: Invoice, payment: BankPayment, actor_id: int) -> None:
             tx.date = payment.booked_on
             tx.method = "IBAN"
             tx.status = "Completed"
+            # The books hold what arrived; a payment assigned by hand may
+            # differ from the invoice (a "mismatch" the treasurer accepted).
+            tx.amount = payment.amount
         payment.transaction_id = invoice.transaction_id
 
 
@@ -124,7 +127,8 @@ def _book(
         description=(text or "Bank booking")[:255],
         category_id=category_id,
         payee_name=payment.counterparty_name,
-        amount=payment.amount,
+        # Expenses are stored negative, as the finance screens create them.
+        amount=payment.amount if payment.direction == "credit" else -payment.amount,
         method="IBAN",
         type="income" if payment.direction == "credit" else "expense",
         status="Completed",
@@ -455,6 +459,8 @@ class RuleService:
             ("description", "description"),
         ):
             if key in data:
+                if data[key] is not None and not isinstance(data[key], str):
+                    raise_error(400, "VALIDATION_ERROR", f"{key} must be text")
                 value = (data.get(key) or "").strip()
                 out[field] = value or None
         if "direction" in data:

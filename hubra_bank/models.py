@@ -33,8 +33,10 @@ PAYMENT_STATUSES = (
     "ignored",
     "batch",
 )
-# Lines the treasurer still has to look at.
-OPEN_STATUSES = ("suggested", "unmatched", "mismatch")
+# Lines the treasurer still has to look at. A second payment of a paid
+# invoice is money in the bank too: it is booked, refunded (ignored) or put
+# on another invoice. Batch totals stay out: their camt.054 lines are booked.
+OPEN_STATUSES = ("suggested", "unmatched", "mismatch", "duplicate_payment")
 DIRECTIONS = ("credit", "debit")
 RULE_FIELDS = ("counterparty", "text", "iban", "any")
 

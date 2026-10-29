@@ -91,6 +91,8 @@ export function OpenPayments({
       )
     }
     const choice = categoryChoice[p.id]
+    // A second payment points at the invoice it already paid: no default.
+    const invoiceId = p.status === 'duplicate_payment' ? null : p.invoiceId
     return (
       <Group gap={6} wrap="nowrap">
         {p.direction === 'credit' && (
@@ -101,15 +103,15 @@ export function OpenPayments({
               searchable
               clearable
               data={openInvoices}
-              value={invoiceChoice[p.id] ?? (p.invoiceId ? String(p.invoiceId) : null)}
+              value={invoiceChoice[p.id] ?? (invoiceId ? String(invoiceId) : null)}
               onChange={(v) => setInvoiceChoice((c) => ({ ...c, [p.id]: v }))}
               placeholder={t('bank.pickInvoice', 'Invoice')}
             />
             <Button
               size="xs"
-              disabled={!invoiceChoice[p.id] && !p.invoiceId}
+              disabled={!invoiceChoice[p.id] && !invoiceId}
               onClick={() =>
-                act(() => assignBankPayment(p.id, Number(invoiceChoice[p.id] ?? p.invoiceId)))
+                act(() => assignBankPayment(p.id, Number(invoiceChoice[p.id] ?? invoiceId)))
               }
             >
               {t('bank.assign', 'Mark paid')}

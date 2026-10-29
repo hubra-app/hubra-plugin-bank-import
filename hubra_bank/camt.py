@@ -80,9 +80,12 @@ def _amount(el) -> tuple[Decimal, str] | None:
     if node is None or not node.text:
         return None
     try:
-        return Decimal(node.text.strip()), node.get("Ccy", "CHF")
+        amount = Decimal(node.text.strip())
     except InvalidOperation:
         return None
+    if not amount.is_finite():  # "NaN" and "Infinity" parse as Decimals
+        return None
+    return amount, node.get("Ccy", "CHF")
 
 
 def _party(tx, role: str) -> tuple[str | None, str | None]:

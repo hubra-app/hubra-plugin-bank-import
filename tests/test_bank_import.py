@@ -160,7 +160,10 @@ def test_import_marks_matching_invoice_paid(client, db, auth_headers, invoices):
     )
     assert resp.get_json()["status"] == "assigned"
     db.session.expire_all()
-    assert db.session.get(Invoice, b.id).status == "Paid"
+    paid_b = db.session.get(Invoice, b.id)
+    assert paid_b.status == "Paid"
+    # The books hold the 40.- that arrived, not the invoice amount.
+    assert db.session.get(Transaction, paid_b.transaction_id).amount == Decimal("40.00")
 
 
 def test_payment_for_paid_invoice_is_flagged(client, db, auth_headers, invoices):
@@ -170,7 +173,68 @@ def test_payment_for_paid_invoice_is_flagged(client, db, auth_headers, invoices)
     resp = client.post("/api/v1/bank/camt054", data=_camt(_tx("120.00", ref_a, "T9")))
     assert resp.get_json()["summary"]["duplicate_payment"] == 1
 
+    # The money is in the bank: it waits for review and can be booked.
+    open_lines = [
+        p
+        for p in client.get("/api/v1/bank/payments?status=open").get_json()
+        if p["status"] == "duplicate_payment"
+    ]
+    assert len(open_lines) == 1
+    cat = TransactionCategory(name="Rückerstattungen")
+    db.session.add(cat)
+    db.session.commit()
+    resp = client.post(
+        f"/api/v1/bank/payments/{open_lines[0]['id']}/book",
+        json={"category_id": cat.id},
+    )
+    assert resp.status_code == 200, resp.get_json()
+
 
 def test_module_off(client, auth_headers, invoices):
     set_modules(False, "finance.bank")
     assert client.post("/api/v1/bank/camt054", data=b"<x/>").status_code == 403
+
+
+_MT940_BAD_DATE = b""":20:STMT
+:25:CH9300762011623852957
+:28C:1/1
+:60F:C261001CHF100,00
+:61:2610320301C10,00NTRFNONREF
+:86:Test
+:62F:C261031CHF110,00
+"""
+
+
+@pytest.mark.parametrize(
+    "fmt, upload",
+    [
+        ("mt940", {"data": _MT940_BAD_DATE, "content_type": "text/plain"}),
+        (
+            "csv",
+            {
+                "data": {
+                    "file": (io.BytesIO(b"Datum;Betrag\n01.10.2026;10.00\n"), "a.csv"),
+                    "mapping": '{"date": [1], "amount": "Betrag"}',
+                },
+                "content_type": "multipart/form-data",
+            },
+        ),
+    ],
+)
+def test_a_malformed_file_is_a_400(client, auth_headers, invoices, fmt, upload):
+    resp = client.post(f"/api/v1/bank/import?format={fmt}", **upload)
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "INVALID_FILE"
+
+
+@pytest.mark.parametrize("amount", ["NaN", "sNaN", "Infinity"])
+def test_amounts_must_be_numbers(amount):
+    ns = "urn:iso:std:iso:20022:tech:xsd:camt.053.001.08"
+    entry = """<Ntry><Amt Ccy="CHF">{}</Amt><CdtDbtInd>CRDT</CdtDbtInd>
+<Sts><Cd>BOOK</Cd></Sts><BookgDt><Dt>2026-10-27</Dt></BookgDt>
+<AcctSvcrRef>X{}</AcctSvcrRef></Ntry>"""
+    xml = f"""<?xml version="1.0"?><Document xmlns="{ns}"><BkToCstmrStmt><Stmt>
+{entry.format("10.00", 1)}{entry.format(amount, 2)}
+</Stmt></BkToCstmrStmt></Document>""".encode()
+    statement = parse(xml)
+    assert [line.amount for line in statement.lines] == [Decimal("10.00")]
