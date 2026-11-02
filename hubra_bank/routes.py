@@ -63,7 +63,7 @@ def _run_import(fmt: str | None):
         return jsonify(
             {
                 "error": "CSV_MAPPING_REQUIRED",
-                "message": str(exc),
+                "message": "CSV mapping is required for this file.",
                 "columns": exc.columns,
                 "sample": exc.sample,
                 "suggested": csvimport.auto_mapping(exc.columns),
