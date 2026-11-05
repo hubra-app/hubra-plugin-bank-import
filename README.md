@@ -4,14 +4,13 @@
 
 A plugin for [Hubra](https://hubra.club). Import bank statements (camt.053, camt.054, MT940 or CSV). Payments are matched to invoices and marked paid, other bookings go into the books by your rules, with a dry run first.
 
-**Version** 1.1.0 · **Works with** Hubra >=0.1,<1 · **Plugin id** `bank-import`
+**Version** 1.2.0 · **Works with** Hubra >=0.2,<1 · **Plugin id** `bank-import`
 
 ## Install
 
-Platform admins install it from the plugin catalogue in the manager portal
+Platform admins install it from the Plugin catalogue in manage
 (official Marketplace, <https://plugins.hubra.club/index.json>, signed with
-the Hubra project key). Clubs then switch it on under Einstellungen → Module
-& Plugins.
+the Hubra project key). Clubs then switch it on under Einstellungen → Module.
 
 ## Develop
 
