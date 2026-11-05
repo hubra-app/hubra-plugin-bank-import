@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- A matched invoice payment is booked again when no plugin keeps the
+  invoices' bookings (Hubra with the books moved into the Finances plugin, but
+  Finances not installed). With Finances, its booking is completed as before.
+
 ## 1.2.0
 
 Built for Hubra 0.2 (Mantine 9, plugin host API 2). Needs Hubra 0.2 or newer.

@@ -115,7 +115,31 @@ def _mark_paid(invoice: Invoice, payment: BankPayment, actor_id: int) -> None:
             # The books hold what arrived; a payment assigned by hand may
             # differ from the invoice (a "mismatch" the treasurer accepted).
             tx.amount = payment.amount
-        payment.transaction_id = invoice.transaction_id
+    else:
+        # Nobody keeps the invoices' bookings (no Finances plugin), so the
+        # payment books its own income. The transactions table is core.
+        tx = Transaction(
+            date=payment.booked_on,
+            description=f"Invoice #{invoice.id}",
+            category_id=_income_category_id(),
+            member_id=invoice.member_id,
+            amount=payment.amount,
+            method="IBAN",
+            type="income",
+            status="Completed",
+        )
+        db.session.add(tx)
+        db.session.flush()
+        invoice.transaction_id = tx.id
+    payment.transaction_id = invoice.transaction_id
+
+
+def _income_category_id() -> int | None:
+    """The "Membership" category, else the first one, as invoice bookings use."""
+    category = db.session.scalar(
+        select(TransactionCategory).where(TransactionCategory.name == "Membership")
+    ) or db.session.scalar(select(TransactionCategory).order_by(TransactionCategory.id))
+    return category.id if category else None
 
 
 def _book(
