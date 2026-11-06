@@ -20,12 +20,12 @@ from collections import defaultdict
 
 from sqlalchemy import select
 
-from hubra.api.finance.services import InvoiceService, _link_pending_transaction
-from hubra.api.utils import log_audit
+from hubra.core.contracts import SYSTEM, call
 from hubra.core.errors import raise_error
 from hubra.core.extensions import db
 from hubra.core.models.finance import Invoice, Transaction, TransactionCategory
 from hubra.core.models.qrr_reference import QrrReference
+from hubra.core.utils import log_audit
 
 from .lines import BankLine, Statement
 from .models import (
@@ -103,9 +103,16 @@ def _invoice_for(reference: str | None) -> Invoice | None:
 
 
 def _mark_paid(invoice: Invoice, payment: BankPayment, actor_id: int) -> None:
-    if invoice.transaction_id is None:
-        _link_pending_transaction(invoice, invoice.member_id)
-    InvoiceService.update(invoice, {"status": "Paid"}, actor_id)
+    # Paid through Finance's contract; ``book`` first has the books book an
+    # invoice that has no booking yet, so the payment can complete it.
+    call(
+        "finance.invoice.set_status",
+        invoice_id=invoice.id,
+        status="Paid",
+        book=True,
+        actor_id=actor_id,
+        actor=SYSTEM,
+    )
     if invoice.transaction_id is not None:
         tx = db.session.get(Transaction, invoice.transaction_id)
         if tx is not None:
