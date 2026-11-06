@@ -16,4 +16,8 @@ module = Module(
         ),
     ),
     tables=("bank_rules", "bank_payments", "bank_csv_profiles"),
+    # Hubra's features it uses, through contracts (docs/contracts.md in hubra).
+    consumes={
+        "finance.invoice.set_status": ">=1,<2",
+    },
 )

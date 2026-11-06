@@ -6,8 +6,8 @@ import json
 
 from flask import Blueprint, jsonify, request
 
-from hubra.api.auth.helpers import get_current_member
-from hubra.api.permissions import permission_required
+from hubra.core.auth.helpers import get_current_member
+from hubra.core.permissions import permission_required
 from hubra.core.errors import api_error
 from hubra.core.extensions import db
 

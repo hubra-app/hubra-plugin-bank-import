@@ -11,3 +11,6 @@ modules: [finance.bank]
 requires: [finance]
 migrations: migrations
 frontend: frontend/dist/plugin.js
+# The areas this plugin extends; Hubra refuses a plugin that touches one it
+# doesn't list. See docs/plugins.md in hubra-app/hubra.
+uses: [routes, tables, contracts, frontend]
