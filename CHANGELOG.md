@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 1.3.0
+
+- An add-on of Finances: it needs the Finances plugin (1.x) and shows inside
+  its card in the Plugin catalogue. Its rules book into the books Finances
+  keeps, so install or update Finances first.
 
 - A matched invoice payment is booked again when no plugin keeps the
   invoices' bookings (Hubra with the books moved into the Finances plugin, but
