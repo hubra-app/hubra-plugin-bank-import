@@ -1,6 +1,6 @@
 id: bank-import
 name: Bank file import
-version: "1.2.0"
+version: "1.3.0"
 hubra: ">=0.2,<1"
 description: "Import bank statements (camt.053, camt.054, MT940 or CSV). Payments are matched to invoices and marked paid, other bookings go into the books by your rules, with a dry run first."
 author: Hubra
@@ -9,6 +9,9 @@ tags: [finance, switzerland]
 package: hubra_bank
 modules: [finance.bank]
 requires: [finance]
+# An add-on of Finances: its rules book into the books that Finances keeps.
+depends:
+  finances: ">=1.0,<2"
 migrations: migrations
 frontend: frontend/dist/plugin.js
 # The areas this plugin extends; Hubra refuses a plugin that touches one it
