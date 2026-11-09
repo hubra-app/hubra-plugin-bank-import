@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.2
+
+1.3.1 was tagged but couldn't be signed, so it was never released. 1.3.2 is the same plugin, signed. What it brings:
+
+- An add-on of Finances: it needs the Finances plugin (1.x) and shows inside
+  its card in the Plugin catalogue. Its rules book into the books Finances
+  keeps, so install or update Finances first.
+
+- A matched invoice payment is booked again when no plugin keeps the
+  invoices' bookings (Hubra with the books moved into the Finances plugin, but
+  Finances not installed). With Finances, its booking is completed as before.
+
 ## 1.3.1
 
 1.3.0 was tagged but couldn't be signed, so it was never released. 1.3.1 is the same plugin, signed. What 1.3.0 brings:
