@@ -2,11 +2,12 @@
 
 ## Unreleased
 
-- Dashboard widget **Offene Zahlungen**: how many imported payments still need a look (suggested, unmatched, wrong amount, paid twice); needs `bank.payments.read`.
+- German texts are in Standard German now; they were still in Swiss German dialect.
 
 ## 1.4.0
 
 - Gives the standard roles access when a club first switches it on (`role_defaults`, docs/roles.md in hubra-app/hubra): Vorstand Ansehen, Kassier/in Alles. Roles without access don't see it; their own data from it stays on their profile. Needs Hubra 0.2.5 or later.
+- Dashboard widget **Offene Zahlungen**: how many imported payments still need a look (suggested, unmatched, wrong amount, paid twice); needs `bank.payments.read`.
 
 ## 1.3.2
 
