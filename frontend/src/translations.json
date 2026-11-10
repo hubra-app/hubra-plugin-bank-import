@@ -70,6 +70,10 @@
         "duplicate_payment": "Already paid",
         "ignored": "Left out",
         "batch": "Collective booking"
+      },
+      "widget": {
+        "open": "Open payments",
+        "openHint": "Imported payments someone still has to look at"
       }
     },
     "shell": {
@@ -149,6 +153,10 @@
         "duplicate_payment": "Scho zahlt",
         "ignored": "Nöd verbuecht",
         "batch": "Sammelbuechig"
+      },
+      "widget": {
+        "open": "Offene Zahlungen",
+        "openHint": "Importierte Zahlungen, die noch jemand anschauen muss"
       }
     },
     "shell": {

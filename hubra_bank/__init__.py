@@ -1,5 +1,6 @@
 """Bank import: read bank statements, mark invoices paid, book the rest."""
 
+from hubra.core.contracts import widget_contract
 from hubra.core.modules import Blueprint, Module
 
 module = Module(
@@ -23,4 +24,16 @@ module = Module(
     consumes={
         "finance.invoice.set_status": ">=1,<2",
     },
+    # Dashboard widget (hubra_bank/widgets.py).
+    provides=(
+        widget_contract(
+            "finance.bank.open",
+            "hubra_bank.widgets:open_payments",
+            label="bank.widget.open",
+            description="bank.widget.openHint",
+            size="s",
+            view="stat",
+            perm="bank.payments.read",
+        ),
+    ),
 )

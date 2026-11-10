@@ -238,3 +238,22 @@ def test_amounts_must_be_numbers(amount):
 </Stmt></BkToCstmrStmt></Document>""".encode()
     statement = parse(xml)
     assert [line.amount for line in statement.lines] == [Decimal("10.00")]
+
+
+# ── Dashboard widgets ───────────────────────────────────────────────────────
+
+
+def test_open_widget(db, invoices):
+    from hubra.core import contracts
+    from hubra_bank.models import BankPayment
+
+    def pay(ref, status):
+        return BankPayment(
+            bank_reference=ref, direction="credit", amount=Decimal("10"), currency="CHF",
+            booked_on=date(2026, 10, 1), status=status,
+        )
+
+    db.session.add_all([pay("a", "unmatched"), pay("b", "suggested"), pay("c", "matched")])
+    db.session.commit()
+    out = contracts.widget_data("finance.bank.open", {}, actor=contracts.SYSTEM)
+    assert out == {"value": 2, "sub": None, "path": "/app/finance/bank"}
