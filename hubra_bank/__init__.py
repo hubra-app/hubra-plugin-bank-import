@@ -4,6 +4,9 @@ from hubra.core.modules import Blueprint, Module
 
 module = Module(
     code="finance.bank",
+    # Access the standard roles get when a club first switches it on
+    # (docs/roles.md in hubra-app/hubra).
+    role_defaults={"board": "view", "treasurer": "all"},
     name="Bank file import",
     description="Import bank statements (camt.053/054, MT940, CSV); payments are matched to invoices and other bookings go into the books",
     default_enabled=False,
