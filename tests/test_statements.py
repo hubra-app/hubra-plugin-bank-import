@@ -596,3 +596,75 @@ def test_file_name(raw, name):
     from hubra_bank.routes import _file_name
 
     assert _file_name(raw) == name
+
+
+# Hand steps that put money in the books need the finance rights.
+
+
+def _no_finance_rights():
+    from unittest.mock import patch
+
+    return patch(
+        "hubra.core.permissions.member_has_permission",
+        side_effect=lambda member, key: not key.startswith("finance."),
+    )
+
+
+def test_assign_and_book_need_the_finance_rights(client, db, auth_headers, setup):
+    data = _camt053(
+        _entry("120.00", ref="A", details=_detail("120.00", "T1", "Fremd AG")),
+        _entry("7.00", ind="DBIT", ref="FEE", text="Kontofuehrung"),
+    )
+    _upload(client, data, "oct.xml")
+    lines = {p["bankReference"]: p for p in client.get("/api/v1/bank/payments").get_json()}
+    credit, fee = lines["T1"], lines["FEE"]
+    with _no_finance_rights():
+        resp = client.post(
+            f"/api/v1/bank/payments/{credit['id']}/assign",
+            json={"invoice_id": setup["invoice"].id},
+        )
+        assert resp.status_code == 403
+        resp = client.post(
+            f"/api/v1/bank/payments/{fee['id']}/book",
+            json={"category_id": setup["phone"].id},
+        )
+        assert resp.status_code == 403
+        resp = client.post(
+            "/api/v1/bank/rules",
+            json={"name": "Fees", "pattern": "kontof", "categoryId": setup["phone"].id},
+        )
+        assert resp.status_code == 403
+    db.session.expire_all()
+    assert db.session.get(Invoice, setup["invoice"].id).status == "Open"
+    assert db.session.scalar(db.select(db.func.count()).select_from(Transaction)) == 0
+    still = {p["bankReference"]: p["status"] for p in client.get("/api/v1/bank/payments").get_json()}
+    assert still == {"T1": "unmatched", "FEE": "unmatched"}
+
+    # With the rights, the same steps go through.
+    resp = client.post(
+        f"/api/v1/bank/payments/{credit['id']}/assign",
+        json={"invoice_id": setup["invoice"].id},
+    )
+    assert resp.status_code == 200
+    tx = db.session.get(Transaction, resp.get_json()["transactionId"])
+    assert (tx.amount, tx.status) == (Decimal("120.00"), "Completed")
+
+
+def test_a_rule_whose_category_is_gone_books_nothing(client, db, auth_headers, setup):
+    from hubra_bank.models import BankRule
+
+    # As in a club schema without foreign keys: the rule outlives its category.
+    db.session.add(
+        BankRule(
+            name="Gone",
+            direction="any",
+            match_field="any",
+            pattern="kontof",
+            category_id=99999,
+        )
+    )
+    db.session.commit()
+    data = _camt053(_entry("7.00", ind="DBIT", ref="FEE", text="Kontofuehrung"))
+    resp = _upload(client, data, "oct.xml")
+    assert resp.status_code == 200
+    assert resp.get_json()["summary"]["unmatched"] == 1

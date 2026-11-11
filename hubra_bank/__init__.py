@@ -23,6 +23,7 @@ module = Module(
     # Hubra's features it uses, through contracts (docs/contracts.md in hubra).
     consumes={
         "finance.invoice.set_status": ">=1,<2",
+        "finance.transaction.create": ">=1,<2",
     },
     # Dashboard widget (hubra_bank/widgets.py).
     provides=(
