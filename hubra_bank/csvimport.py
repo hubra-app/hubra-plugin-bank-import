@@ -226,6 +226,24 @@ def auto_mapping(columns: list[str]) -> dict[str, list[str]]:
     return mapping
 
 
+def clean_mapping(mapping: dict) -> dict[str, list[str]]:
+    """Only known fields and column names, as kept for the next file.
+
+    The mapping comes from the browser; what is saved is what ``parse``
+    used, not whatever else the request carried."""
+    out: dict[str, list[str]] = {}
+    for field, value in mapping.items():
+        if field not in FIELDS or not value:
+            continue
+        cols = [value] if isinstance(value, str) else value
+        if not isinstance(cols, list):
+            continue
+        cols = [c[:200] for c in cols if isinstance(c, str) and c][:20]
+        if cols:
+            out[field] = cols
+    return out
+
+
 def _usable(mapping: dict[str, list[str]]) -> bool:
     return "date" in mapping and (
         "amount" in mapping or "credit" in mapping or "debit" in mapping

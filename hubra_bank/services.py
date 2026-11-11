@@ -416,7 +416,9 @@ class BankImportService:
 
     @staticmethod
     def _open(payment_id: int) -> BankPayment:
-        payment = db.session.get(BankPayment, payment_id)
+        # Locked until the commit, so two clicks at once can't pay two
+        # invoices (or book twice) with the same line.
+        payment = db.session.get(BankPayment, payment_id, with_for_update=True)
         if payment is None:
             raise_error(404, "NOT_FOUND", "Payment not found")
         if payment.status not in OPEN_STATUSES:
@@ -505,11 +507,16 @@ class RuleService:
                 raise_error(400, "VALIDATION_ERROR", "Unknown matchField")
             out["match_field"] = data["matchField"]
         if "categoryId" in data:
-            if db.session.get(TransactionCategory, data["categoryId"]) is None:
+            category_id = data["categoryId"]
+            if not isinstance(category_id, int) or isinstance(category_id, bool):
+                raise_error(400, "VALIDATION_ERROR", "categoryId must be a number")
+            if db.session.get(TransactionCategory, category_id) is None:
                 raise_error(404, "NOT_FOUND", "Category not found")
             out["category_id"] = data["categoryId"]
         if "active" in data:
-            out["active"] = bool(data["active"])
+            if not isinstance(data["active"], bool):
+                raise_error(400, "VALIDATION_ERROR", "active must be true or false")
+            out["active"] = data["active"]
         if not partial:
             for required in ("name", "pattern", "category_id"):
                 if not out.get(required):
@@ -530,28 +537,45 @@ class RuleService:
     def list() -> list[BankRule]:
         return list(db.session.scalars(select(BankRule).order_by(BankRule.id)))
 
+    # Rules put money into the books without anyone looking, so every change
+    # to one is in the audit log.
     @staticmethod
-    def create(data: dict) -> BankRule:
+    def _audit(actor_id: int | None, action: str, rule: BankRule) -> None:
+        log_audit(
+            actor_id,
+            action,
+            "BankRule",
+            rule.id,
+            f"{rule.name}: {rule.direction} {rule.match_field} contains "
+            f"{rule.pattern!r} -> category {rule.category_id}"
+            f"{'' if rule.active else ' (off)'}",
+        )
+
+    @staticmethod
+    def create(data: dict, actor_id: int | None = None) -> BankRule:
         rule = BankRule(**RuleService.validate(data))
         db.session.add(rule)
         db.session.flush()
+        RuleService._audit(actor_id, "create_bank_rule", rule)
         return rule
 
     @staticmethod
-    def update(rule_id: int, data: dict) -> BankRule:
+    def update(rule_id: int, data: dict, actor_id: int | None = None) -> BankRule:
         rule = db.session.get(BankRule, rule_id)
         if rule is None:
             raise_error(404, "NOT_FOUND", "Rule not found")
         for key, value in RuleService.validate(data, partial=True).items():
             setattr(rule, key, value)
         db.session.flush()
+        RuleService._audit(actor_id, "update_bank_rule", rule)
         return rule
 
     @staticmethod
-    def delete(rule_id: int) -> None:
+    def delete(rule_id: int, actor_id: int | None = None) -> None:
         rule = db.session.get(BankRule, rule_id)
         if rule is None:
             raise_error(404, "NOT_FOUND", "Rule not found")
+        RuleService._audit(actor_id, "delete_bank_rule", rule)
         db.session.delete(rule)
         db.session.flush()
 

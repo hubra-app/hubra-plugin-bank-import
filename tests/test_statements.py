@@ -511,3 +511,88 @@ def test_csv_columns(client, auth_headers, setup):
 def test_camt_refuses_any_dtd(data):
     with pytest.raises(camt.CamtError, match="DOCTYPE"):
         camt.parse(data)
+
+
+# Security audit 2026-11: input checks on the routes.
+
+
+def test_rule_fields_are_checked(client, auth_headers, setup):
+    base = {"name": "Fees", "pattern": "kontof"}
+    for category in ("1", True, [1], {"id": 1}):
+        resp = client.post("/api/v1/bank/rules", json={**base, "categoryId": category})
+        assert resp.status_code == 400, category
+    rule = client.post(
+        "/api/v1/bank/rules", json={**base, "categoryId": setup["phone"].id}
+    ).get_json()
+    # "false" as text is not "off" turned into "on".
+    resp = client.patch(f"/api/v1/bank/rules/{rule['id']}", json={"active": "false"})
+    assert resp.status_code == 400
+    assert client.get("/api/v1/bank/rules").get_json()[0]["active"] is True
+
+
+def test_rule_changes_are_audited(client, db, auth_headers, setup):
+    from hubra.core.models.audit import AuditEntry
+
+    rule = client.post(
+        "/api/v1/bank/rules",
+        json={"name": "Fees", "pattern": "kontof", "categoryId": setup["phone"].id},
+    ).get_json()
+    client.patch(f"/api/v1/bank/rules/{rule['id']}", json={"pattern": "gebuehr"})
+    client.delete(f"/api/v1/bank/rules/{rule['id']}")
+    actions = list(
+        db.session.scalars(
+            db.select(AuditEntry.action).where(AuditEntry.target_type == "BankRule")
+        )
+    )
+    assert actions == ["create_bank_rule", "update_bank_rule", "delete_bank_rule"]
+
+
+def test_saved_csv_mapping_keeps_only_known_fields(client, db, auth_headers, setup):
+    mapping = (
+        '{"date": ["Tag"], "amount": "Wieviel", "text": ["Was"],'
+        ' "evil": ["' + "x" * 5000 + '"], "credit": []}'
+    )
+    resp = client.post(
+        "/api/v1/bank/import",
+        data={"file": (io.BytesIO(ODD_CSV), "odd.csv"), "mapping": mapping},
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 200
+    saved = db.session.scalar(db.select(BankCsvProfile)).mapping
+    assert saved == {"date": ["Tag"], "amount": ["Wieviel"], "text": ["Was"]}
+
+
+def test_file_name_is_cut_to_its_own_name(client, auth_headers, setup):
+    data = _camt053(_entry("7.00", ind="DBIT", ref="FEE", text="Kontofuehrung"))
+    resp = _upload(client, data, "../../kassier/" + "a" * 400 + ".xml")
+    assert resp.status_code == 200
+    [line] = client.get("/api/v1/bank/payments").get_json()
+    assert line["fileName"] == ("a" * 400 + ".xml")[:255]
+
+
+def test_csv_columns_has_the_size_limit(client, auth_headers, setup, monkeypatch):
+    from hubra_bank import lines
+
+    monkeypatch.setattr(lines, "MAX_BYTES", 100)
+    resp = client.post(
+        "/api/v1/bank/csv/columns",
+        data={"file": (io.BytesIO(POSTFINANCE_CSV), "pf.csv")},
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "raw, name",
+    [
+        ("C:\\Users\\kassier\\oct.xml", "oct.xml"),
+        ("../../etc/oct.sta", "oct.sta"),
+        ("a\x00b\n.csv", "ab.csv"),
+        ("", None),
+        ("x" * 300, "x" * 255),
+    ],
+)
+def test_file_name(raw, name):
+    from hubra_bank.routes import _file_name
+
+    assert _file_name(raw) == name
