@@ -648,3 +648,23 @@ def test_assign_and_book_need_the_finance_rights(client, db, auth_headers, setup
     assert resp.status_code == 200
     tx = db.session.get(Transaction, resp.get_json()["transactionId"])
     assert (tx.amount, tx.status) == (Decimal("120.00"), "Completed")
+
+
+def test_a_rule_whose_category_is_gone_books_nothing(client, db, auth_headers, setup):
+    from hubra_bank.models import BankRule
+
+    # As in a club schema without foreign keys: the rule outlives its category.
+    db.session.add(
+        BankRule(
+            name="Gone",
+            direction="any",
+            match_field="any",
+            pattern="kontof",
+            category_id=99999,
+        )
+    )
+    db.session.commit()
+    data = _camt053(_entry("7.00", ind="DBIT", ref="FEE", text="Kontofuehrung"))
+    resp = _upload(client, data, "oct.xml")
+    assert resp.status_code == 200
+    assert resp.get_json()["summary"]["unmatched"] == 1

@@ -216,9 +216,17 @@ class _Matcher:
                 self.iban_payers[iban].add(("member", member_id))
             elif external_id:
                 self.iban_payers[iban].add(("external", external_id))
+        # Only rules whose category is still there: a club schema may have
+        # no foreign keys, so deleting a category doesn't always take its
+        # rules along, and booking into a gone category stops the import.
         self.rules = list(
             db.session.scalars(
-                select(BankRule).where(BankRule.active.is_(True)).order_by(BankRule.id)
+                select(BankRule)
+                .join(
+                    TransactionCategory, TransactionCategory.id == BankRule.category_id
+                )
+                .where(BankRule.active.is_(True))
+                .order_by(BankRule.id)
             )
         )
         # Invoices already claimed by an earlier line of the same file.
