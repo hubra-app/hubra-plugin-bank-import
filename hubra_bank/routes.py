@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import json
+import os
 
 from flask import Blueprint, jsonify, request
-
 from hubra.core.auth.helpers import get_current_member
-from hubra.core.permissions import permission_required
 from hubra.core.errors import api_error
 from hubra.core.extensions import db
+from hubra.core.permissions import permission_required
+from sqlalchemy.exc import IntegrityError
 
 from . import csvimport
 from .formats import FORMATS, detect, read
-from .lines import StatementError
+from .lines import StatementError, check_size
 from .models import DIRECTIONS, PAYMENT_STATUSES
 from .services import (
     BankImportService,
@@ -26,10 +27,19 @@ from .services import (
 bank_bp = Blueprint("bank_bp", __name__)
 
 
+def _file_name(raw: str | None) -> str | None:
+    """The upload's own name, without a path and short enough to keep."""
+    if not raw:
+        return None
+    name = os.path.basename(raw.replace("\\", "/")).strip()
+    name = "".join(c for c in name if c.isprintable())
+    return name[:255] or None
+
+
 def _upload() -> tuple[bytes, str | None]:
     upload = request.files.get("file")
     data = upload.read() if upload else request.get_data()
-    return data, upload.filename if upload else None
+    return data, _file_name(upload.filename) if upload else None
 
 
 def _run_import(fmt: str | None):
@@ -73,15 +83,23 @@ def _run_import(fmt: str | None):
     except StatementError as exc:
         return api_error("INVALID_FILE", str(exc), 400)
     dry_run = request.args.get("dry_run") in ("1", "true")
-    result = BankImportService.import_statement(
-        statement, file_name, get_current_member().id, dry_run=dry_run
-    )
-    if dry_run:
+    try:
+        result = BankImportService.import_statement(
+            statement, file_name, get_current_member().id, dry_run=dry_run
+        )
+        if dry_run:
+            db.session.rollback()
+        else:
+            if signature and mapping:
+                CsvProfileService.save(signature, csvimport.clean_mapping(mapping))
+            db.session.commit()
+    except IntegrityError:
+        # The same lines were imported at the same moment (a double click,
+        # two people): the other import booked them, this one books nothing.
         db.session.rollback()
-    else:
-        if signature and mapping:
-            CsvProfileService.save(signature, mapping)
-        db.session.commit()
+        return api_error(
+            "CONFLICT", "This file is being imported already; reload and check", 409
+        )
     return jsonify(result), 200
 
 
@@ -110,6 +128,7 @@ def csv_columns():
     """The header and first rows of a CSV, to map its columns by hand."""
     data, _ = _upload()
     try:
+        check_size(data)
         columns, body, _ = csvimport.read_columns(data)
     except StatementError as exc:
         return api_error("INVALID_FILE", str(exc), 400)
@@ -194,7 +213,9 @@ def list_rules():
 @bank_bp.post("/rules")
 @permission_required("payments", "import", "Import bank files")
 def create_rule():
-    rule = RuleService.create(request.get_json(silent=True) or {})
+    rule = RuleService.create(
+        request.get_json(silent=True) or {}, get_current_member().id
+    )
     db.session.commit()
     return jsonify(rule_to_dict(rule)), 201
 
@@ -202,7 +223,9 @@ def create_rule():
 @bank_bp.patch("/rules/<int:rule_id>")
 @permission_required("payments", "import", "Import bank files")
 def update_rule(rule_id: int):
-    rule = RuleService.update(rule_id, request.get_json(silent=True) or {})
+    rule = RuleService.update(
+        rule_id, request.get_json(silent=True) or {}, get_current_member().id
+    )
     db.session.commit()
     return jsonify(rule_to_dict(rule)), 200
 
@@ -210,6 +233,6 @@ def update_rule(rule_id: int):
 @bank_bp.delete("/rules/<int:rule_id>")
 @permission_required("payments", "import", "Import bank files")
 def delete_rule(rule_id: int):
-    RuleService.delete(rule_id)
+    RuleService.delete(rule_id, get_current_member().id)
     db.session.commit()
     return "", 204
