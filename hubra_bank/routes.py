@@ -7,7 +7,7 @@ import os
 
 from flask import Blueprint, jsonify, request
 from hubra.core.auth.helpers import get_current_member
-from hubra.core.errors import api_error
+from hubra.core.errors import api_error, raise_error
 from hubra.core.extensions import db
 from hubra.core.permissions import permission_required
 from sqlalchemy.exc import IntegrityError
@@ -210,9 +210,25 @@ def list_rules():
     return jsonify([rule_to_dict(r) for r in RuleService.list()]), 200
 
 
+def _may_book() -> None:
+    """Rules book into the books without anyone looking, so setting one up
+    needs the right to book by hand too (finance.transactions.create)."""
+    from hubra.core import permissions
+
+    if not permissions.member_has_permission(
+        get_current_member(), "finance.transactions.create"
+    ):
+        raise_error(
+            403,
+            "FORBIDDEN",
+            "Booking rules need the right finance.transactions.create",
+        )
+
+
 @bank_bp.post("/rules")
 @permission_required("payments", "import", "Import bank files")
 def create_rule():
+    _may_book()
     rule = RuleService.create(
         request.get_json(silent=True) or {}, get_current_member().id
     )
@@ -223,6 +239,7 @@ def create_rule():
 @bank_bp.patch("/rules/<int:rule_id>")
 @permission_required("payments", "import", "Import bank files")
 def update_rule(rule_id: int):
+    _may_book()
     rule = RuleService.update(
         rule_id, request.get_json(silent=True) or {}, get_current_member().id
     )

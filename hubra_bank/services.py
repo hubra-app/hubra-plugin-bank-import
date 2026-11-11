@@ -18,14 +18,13 @@ import re
 import unicodedata
 from collections import defaultdict
 
-from sqlalchemy import select
-
-from hubra.core.contracts import SYSTEM, call
+from hubra.core.contracts import CURRENT, SYSTEM, ActionForbidden, ContractError, call
 from hubra.core.errors import raise_error
 from hubra.core.extensions import db
-from hubra.core.models.finance import Invoice, Transaction, TransactionCategory
+from hubra.core.models.finance import Invoice, TransactionCategory
 from hubra.core.models.qrr_reference import QrrReference
 from hubra.core.utils import log_audit
+from sqlalchemy import select
 
 from .lines import BankLine, Statement
 from .models import (
@@ -102,73 +101,68 @@ def _invoice_for(reference: str | None) -> Invoice | None:
     return db.session.get(Invoice, mapping.invoice_id) if mapping else None
 
 
-def _mark_paid(invoice: Invoice, payment: BankPayment, actor_id: int) -> None:
-    # Paid through Finance's contract; ``book`` first has the books book an
-    # invoice that has no booking yet, so the payment can complete it.
-    call(
+def _contract(name: str, actor, **fields) -> dict:
+    """Run one of Finance's actions; a member without its right gets a 403.
+
+    Lines the import matches or books by a rule run as SYSTEM: the club
+    said so with its rules and QR references. What a member does by hand
+    runs as that member, so it needs the finance right for it."""
+    try:
+        return call(name, actor=actor, **fields)
+    except ActionForbidden as exc:
+        raise_error(403, "FORBIDDEN", str(exc))
+    except ContractError as exc:
+        # Finance refused the values (an amount of 0, say): nothing booked.
+        raise_error(400, "VALIDATION_ERROR", str(exc))
+
+
+def _mark_paid(
+    invoice: Invoice, payment: BankPayment, actor_id: int, actor=SYSTEM
+) -> None:
+    # Paid through Finance's contract: ``book`` first has the books book an
+    # invoice that has no booking yet, and ``payment`` gives that booking
+    # what arrived (a payment assigned by hand may differ from the invoice,
+    # a "mismatch" the treasurer accepted), or books the income when nobody
+    # keeps the invoices' bookings.
+    out = _contract(
         "finance.invoice.set_status",
+        actor,
         invoice_id=invoice.id,
         status="Paid",
         book=True,
         actor_id=actor_id,
-        actor=SYSTEM,
+        payment={
+            "on": payment.booked_on.isoformat(),
+            "amount": str(payment.amount),
+            "method": "IBAN",
+        },
     )
-    if invoice.transaction_id is not None:
-        tx = db.session.get(Transaction, invoice.transaction_id)
-        if tx is not None:
-            tx.date = payment.booked_on
-            tx.method = "IBAN"
-            tx.status = "Completed"
-            # The books hold what arrived; a payment assigned by hand may
-            # differ from the invoice (a "mismatch" the treasurer accepted).
-            tx.amount = payment.amount
-    else:
-        # Nobody keeps the invoices' bookings (no Finances plugin), so the
-        # payment books its own income. The transactions table is core.
-        tx = Transaction(
-            date=payment.booked_on,
-            description=f"Invoice #{invoice.id}",
-            category_id=_income_category_id(),
-            member_id=invoice.member_id,
-            amount=payment.amount,
-            method="IBAN",
-            type="income",
-            status="Completed",
-        )
-        db.session.add(tx)
-        db.session.flush()
-        invoice.transaction_id = tx.id
-    payment.transaction_id = invoice.transaction_id
-
-
-def _income_category_id() -> int | None:
-    """The "Membership" category, else the first one, as invoice bookings use."""
-    category = db.session.scalar(
-        select(TransactionCategory).where(TransactionCategory.name == "Membership")
-    ) or db.session.scalar(select(TransactionCategory).order_by(TransactionCategory.id))
-    return category.id if category else None
+    payment.transaction_id = out["transaction_id"]
 
 
 def _book(
-    payment: BankPayment, category_id: int, description: str | None
-) -> Transaction:
+    payment: BankPayment,
+    category_id: int,
+    description: str | None,
+    actor_id: int,
+    actor=SYSTEM,
+) -> int:
     text = description or payment.remittance or payment.counterparty_name
-    tx = Transaction(
-        date=payment.booked_on,
+    out = _contract(
+        "finance.transaction.create",
+        actor,
+        booked_on=payment.booked_on.isoformat(),
         description=(text or "Bank booking")[:255],
         category_id=category_id,
-        payee_name=payment.counterparty_name,
-        # Expenses are stored negative, as the finance screens create them.
-        amount=payment.amount if payment.direction == "credit" else -payment.amount,
-        method="IBAN",
+        amount=str(payment.amount),
         type="income" if payment.direction == "credit" else "expense",
-        status="Completed",
+        method="IBAN",
+        payee_name=(payment.counterparty_name or None),
+        actor_id=actor_id,
     )
-    db.session.add(tx)
-    db.session.flush()
-    payment.transaction_id = tx.id
+    payment.transaction_id = out["id"]
     payment.status = "booked"
-    return tx
+    return out["id"]
 
 
 def _tokens(text: str | None) -> set[str]:
@@ -273,6 +267,9 @@ class _Matcher:
         """(status, invoice, suggested invoice, rule)"""
         if line.batch:
             return "batch", None, None, None
+        if line.amount <= 0:
+            # Nothing to pay an invoice with or to book; shown for a look.
+            return "unmatched", None, None, None
         if line.direction == "credit" and not line.reversal:
             if line.reference_type == "QRR":
                 invoice = _invoice_for(line.reference)
@@ -371,7 +368,7 @@ class BankImportService:
             if status == "matched":
                 _mark_paid(invoice, payment, actor_id)
             elif status == "booked":
-                _book(payment, rule.category_id, rule.description)
+                _book(payment, rule.category_id, rule.description, actor_id)
         if not dry_run:
             log_audit(
                 actor_id,
@@ -436,10 +433,11 @@ class BankImportService:
             raise_error(404, "NOT_FOUND", "Invoice not found")
         if invoice.status == "Paid":
             raise_error(409, "CONFLICT", "This invoice is already paid")
+        # As the member: marking an invoice paid needs finance.invoices.update.
+        _mark_paid(invoice, payment, actor_id, actor=CURRENT)
         payment.invoice_id = invoice.id
         payment.suggested_invoice_id = None
         payment.status = "assigned"
-        _mark_paid(invoice, payment, actor_id)
         db.session.flush()
         return payment
 
@@ -459,11 +457,17 @@ class BankImportService:
     ) -> BankPayment:
         """Put a line in the books without an invoice (expense, donation...)."""
         payment = BankImportService._open(payment_id)
-        if db.session.get(TransactionCategory, category_id) is None:
-            raise_error(404, "NOT_FOUND", "Category not found")
+        # As the member: a booking needs finance.transactions.create.
+        tx_id = _book(payment, category_id, description, actor_id, actor=CURRENT)
         payment.suggested_invoice_id = None
-        tx = _book(payment, category_id, description)
-        log_audit(actor_id, "book_bank_payment", "Transaction", tx.id, tx.description)
+        log_audit(
+            actor_id,
+            "book_bank_payment",
+            "Transaction",
+            tx_id,
+            payment.bank_reference,
+        )
+        db.session.flush()
         return payment
 
     @staticmethod
