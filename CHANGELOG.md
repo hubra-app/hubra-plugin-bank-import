@@ -1,10 +1,10 @@
 # Changelog
 
-## Unreleased
+## 1.4.1
 
 - German texts are in Standard German now; they were still in Swiss German dialect.
 - Security audit fixes: creating, changing and deleting a booking rule is in the audit log; a rule's category and on/off switch are checked (text or `true` as the category id is refused); the saved CSV column mapping keeps only known fields and column names; the uploaded file name is kept without its path and cut to 255 characters; reading CSV columns has the same 10 MB limit as the import; a payment is locked while it is assigned, booked or ignored, so a double click can't pay two invoices with it; an import that clashes with one running at the same moment answers 409 instead of a server error.
-- Bookings and invoice payments go through Finance's contracts (`finance.transaction.create`, `finance.invoice.set_status` with `payment`) instead of the plugin writing core bookings itself. Assigning a line to an invoice by hand needs `finance.invoices.update`; booking a line by hand and creating or changing a booking rule need `finance.transactions.create`. The Kassier/in role has both; lines matched by QR reference or by a rule during the import are booked as before. A line of 0.00 waits for a look instead of being booked. Needs the Hubra release with these contracts: raise `hubra:` in plugin.yaml to it when releasing.
+- Bookings and invoice payments go through Finance's contracts (`finance.transaction.create`, `finance.invoice.set_status` with `payment`) instead of the plugin writing core bookings itself. Assigning a line to an invoice by hand needs `finance.invoices.update`; booking a line by hand and creating or changing a booking rule need `finance.transactions.create`. The Kassier/in role has both; lines matched by QR reference or by a rule during the import are booked as before. A line of 0.00 waits for a look instead of being booked. Needs Hubra 0.2.6 or later.
 
 ## 1.4.0
 
